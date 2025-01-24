@@ -1,0 +1,887 @@
+---
+title: "lay_judges_analysis"
+author: "Justin Braun"
+date: "2024-01-19"
+output: html_document
+---
+
+Note this script doesn't use clustered SEs and it uses the full dataframe including defendants who did not receive prison times. Its purpose was to identify relevant correlations between judge/defendant demographics and sentencing outcomes.
+
+## Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = "../..")
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+print(getwd())
+```
+
+```{r load packages}
+#load packages
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(readxl)
+require(openxlsx)
+require(broom)
+require(stringr)
+```
+
+```{r load data}
+#load short data frame: case x defendant level
+df_short <- readxl::read_excel('../01_preprocessed_data/hidden/full_short.xlsx') %>%
+  mutate(punishment_prison_days_conditiional = as.numeric(punishment_prison_days_conditiional),
+         case_district_court = relevel(factor(case_district_court), "Oslo tingrett"))#reorder factor for regr. analysis
+```
+
+```{r prep config}
+### FUNCTION: extract_vars ###
+# @param cur_fp: filepath to spreadsheet containing variable list
+# @param cur_sheet: sheet name containing variable list
+#
+# returns: vector of variables
+extract_vars <- function(cur_fp, cur_sheet){
+  cur_df <- readxl::read_excel(cur_fp, sheet = cur_sheet)
+  return(cur_df$vars)
+}
+
+fp_desc <- '../02_config/config_descriptives.xlsx' #file path for descriptive variables
+fp_regr <- '../02_config/config_regression.xlsx' #file path for regression variables
+
+#load variables into vectors
+defendant_chars_descriptive <- extract_vars(fp_desc, 'defendant_chars')
+judge_chars_descriptive <- extract_vars(fp_desc,'judge_chars')
+outcomes_descriptive <- extract_vars(fp_desc, 'outcomes')
+
+defendant_chars_regression <- extract_vars(fp_regr, 'defendant_chars')
+judge_chars_regression <- extract_vars(fp_regr,'judge_chars')
+outcomes_regression <- extract_vars(fp_regr, 'outcomes')
+
+
+circs_regression <- openxlsx::read.xlsx('../02_config/aggravating_mitigating_circs.xlsx')$col
+sections_regression <- openxlsx::read.xlsx('../02_config/sections.xlsx')$col
+sections_descriptive <- sections_regression
+
+dir.create('../03_results/exploratory', showWarnings = F)
+```
+
+## Basic Descriptives
+
+```{r RQ 1 descriptives}
+### FUNCTION: descriptive_analysis ###
+# @param raw_df: df that contains all variables contained in other paramuments
+# @param fp: filepath to save results spreadsheet (needs to end in '.csv')
+# @param column: If raw_df was restricted in some way, this can be indicated here
+# @param print: boolean to indicate if graphs should be generated
+# @param variables_to_check: vector of (string) variables to pivot over
+#
+# @returns: spreadsheet of pivot results
+#
+# @process: pivot raw_df by each variable in variables_to_check, calculate means for each
+# variable in outcomes_descriptive, and add variable counts.
+# Display means broken down by outcomes and each variable in variables_to_check.
+descriptive_analysis <- function(raw_df, fp, column = '', print, variables_to_check){
+  #set up master df
+  desc_master_df <- data.frame()
+  
+  #loop over variables_to_check
+  for(variable in variables_to_check){
+    if(print) print(variable)
+    
+    #pivot raw_df by variable and calculate means for each variable in outcomes_descriptive
+    cur_df <- raw_df %>%
+      group_by_at(variable) %>%
+      summarise_at(.vars = c(outcomes_descriptive, circs_regression), .funs = mean, na.rm = T)
+      
+    #calculate counts for each breakdown
+    cur_df_count <- raw_df %>%
+      group_by_at(variable) %>%
+      count()
+    
+    #join counts and rename variables
+    cur_df <- cur_df %>%
+      left_join(cur_df_count, by = variable) %>%
+      rename(var_value = variable) %>%
+      mutate(var_value = as.character(var_value), #var_value contains the variable values of 'variable'
+             grouping_var = variable, #variable we pivoted by
+             restriction = column) #restriction condition
+    
+    #bind results to master df
+    desc_master_df <- desc_master_df %>%
+      bind_rows(cur_df)
+  }
+  
+  #pivot to longer for graphical analysis, only keep outcome means
+  desc_master_df_short <- desc_master_df %>%
+    dplyr::select(outcomes_descriptive, var_value, grouping_var) %>%
+    pivot_longer(cols = all_of(outcomes_descriptive), names_to = 'outcome_char', values_to = 'outcome_value') %>%
+    filter(!is.na(grouping_var)) #get rid of NAs
+  
+  #loop over variables_to_check to plot results separately for each var in variables_to_check
+  for(variable in variables_to_check){
+    
+    #restrict master_df to 'variable'
+    cur_df <- desc_master_df_short %>%
+      dplyr::filter(grouping_var == variable)
+    
+    #plot results; each plot is for a single variable in variables_to_check
+    #x-axis are var_values, y-axis are outcome means, facets are different outcomes
+    p <- ggplot(cur_df, aes(x = var_value, y = outcome_value))+
+          geom_bar(stat = 'identity', position = 'dodge', fill = 'blue')+
+          facet_wrap(.~outcome_char, scales = 'free_y')+
+          labs(title = variable, x = 'characteristic',
+               y = 'mean outcome value')+
+          theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size = 5))
+    #print if 'print' is set to true
+    if(print) print(p)
+  }
+  
+  
+  #save master df (in wide format) at fp
+  write.csv(desc_master_df, fp)
+  
+  #return master df (in wide format)
+  return(desc_master_df)
+}
+
+```
+
+## Regression analysis
+
+```{r}
+### FUNCTION: regression_analysis ###
+# @param raw_df: df that contains all variables contained in other paramuments
+# @param fp: filepath to save results spreadsheet (needs to end in '.csv')
+# @param column: If raw_df was restricted in some way, this can be indicated here
+# @param print: boolean to indicate if graphs should be generated
+# @param variables_to_check: vector of (string) variables; independent variables
+# @param controls: vector of variables to control for in 'Pers.' and 'Conv.' regressions
+# @separate_displays: vector of variables for which to create separate graphs
+#
+# @returns: spreadsheet of regression results
+#
+# @process: loop over each variable in variables_to_check and each outcome in outcomes_regressions.
+# regress outcome on variable without controls (None), with demographic controls and controls in 'controls' ('Pers.'),
+# and the above-mentioned controls plus dummy variables for each conviction section ('Conv.').
+# Display results for each variable in variables_to_check by outcome and model type (i.e., the level of controls). Make separate graphs 
+# for factor variables with a lot of levels that are contained in separate_displays
+regression_analysis <- function(raw_df, fp, column, print, variables_to_check, controls, seperate_displays = c(' ')){
+  #set up master df
+  reg_master_df <- data.frame()
+  
+  #loop over variables_to_check
+  for(variable in variables_to_check){
+    if(print) print(variable)
+    
+    #loop over outcomes_regression
+    for(outcome in outcomes_regression){
+      #No controls regression#
+      #set up formula
+      fr <- paste0(outcome, ' ~ ', variable)
+      #fit; catch errors
+      cur_fit <- try(lm(formula = fr, data = raw_df))
+      if(is(cur_fit, 'try-error')){
+        print(paste0('Failed: ', fr))
+        next
+      }
+      #convert fit to df and correctly set up variables
+      cur_fit_df <- cur_fit %>%
+        tidy(conf.int = T, conf.level = 0.95) %>%
+        as.data.frame() %>%
+        filter(grepl(variable, term)) %>%
+        mutate(outcome = outcome,
+               sig_level = case_when(p.value < 0.01 ~ '***',
+                                     p.value < 0.05 ~ '**',
+                                     p.value < 0.1 ~ '*',
+                                     .default = 'insig'),
+               controls = 'None',
+               restriction = column)
+      #merge results with master df
+      reg_master_df <- reg_master_df %>%
+        bind_rows(cur_fit_df)
+    }
+  }
+  #loop over outcomes_regression
+  for(outcome in outcomes_regression){
+    #Personal controls regression#
+    #set up formula
+    fr_pers <- paste0(outcome, ' ~ ', paste(c(variables_to_check, controls), collapse = ' + '))
+    
+    #fit with demographic controls; catch errors
+    cur_fit_pers <- try(lm(formula = fr_pers, data = raw_df))
+    if(is(cur_fit_pers, 'try-error')){
+      print(paste0('Failed: ', fr_pers))
+      next
+    }
+    
+    #convert model to df
+    cur_fit_pers_df <- cur_fit_pers %>%
+      tidy(conf.int = T, conf.level = 0.95) %>%
+      as.data.frame() %>%
+      filter(grepl(paste(variables_to_check, collapse = '|'), term)) %>%
+      mutate(outcome = outcome,
+             sig_level = case_when(p.value < 0.01 ~ '***',
+                                   p.value < 0.05 ~ '**',
+                                   p.value < 0.1 ~ '*',
+                                   .default = 'insig'),
+             controls = 'Pers.',
+             restriction = column)
+    
+    #merge results with master df
+    reg_master_df <- reg_master_df %>%
+      bind_rows(cur_fit_pers_df)
+    
+    #set up formula for model including conviction controls
+    fr_conv <- paste0(outcome, ' ~ .')
+    
+    #keep only outcome variables and variables used as controls
+    raw_df_restricted <- raw_df %>%
+      dplyr::select(all_of(c(outcome, variables_to_check, controls, sections_regression, circs_regression)))
+    
+    #fit with all controls; catch errors
+    cur_fit_conv <- lm(formula = fr_conv, data = raw_df_restricted)
+    if(is(cur_fit_conv, 'try-error')){
+      print(paste0('Failed: ', fr_conv))
+      next
+    }
+    
+    #convert model to df
+    cur_fit_conv_df <- cur_fit_conv %>%
+      tidy(conf.int = T, conf.level = 0.95) %>%
+      as.data.frame() %>%
+      filter(grepl(paste(variables_to_check, collapse = '|'), term)) %>%
+      mutate(outcome = outcome,
+             sig_level = case_when(p.value < 0.01 ~ '***',
+                                   p.value < 0.05 ~ '**',
+                                   p.value < 0.1 ~ '*',
+                                   .default = 'insig'),
+             controls = 'Conv.',
+             restriction = column)
+    
+    #bind to master df
+    reg_master_df <- reg_master_df %>%
+      bind_rows(cur_fit_conv_df)
+  }
+  
+  #set up order of levels for controls variable
+  reg_master_df$controls <- factor(reg_master_df$controls, levels = c('None', 'Pers.', 'Conv.'))
+  
+  #generate graphs if print is set to true
+  if(print){
+    
+    #loop over outcomes_regression
+    for(cur_outcome in outcomes_regression){
+      #restrict current dataframe to the current outcome variable and remove independent variables
+      #contained in 'separate_displays' vector
+      cur_df <- reg_master_df %>%
+        filter(outcome == cur_outcome, !grepl(paste(seperate_displays, collapse = '|'), term))
+      
+      #generate plot: x-axis is types of controls used, y-axis is effect size, color is significance level
+      #facet is the independent variable; allow y-axis scale to vary
+      p <- ggplot(cur_df, aes(x = controls, y = estimate, color = sig_level))+
+        geom_point()+
+        geom_errorbar(aes(ymin = conf.low, ymax = conf.high))+
+        facet_wrap(.~term, scales = 'free_y')+
+        labs(x = 'Controls',
+             y = 'Effect Size',
+             title = cur_outcome)
+       print(p)
+       
+       #generate separate graphs for variables in 'seperate_displays'
+       for(sep_var in seperate_displays){
+         cur_df <- reg_master_df %>%
+          filter(outcome == cur_outcome, grepl(sep_var, term)) %>%
+          mutate(term_short = stringr::str_replace(term, sep_var, ''))
+        if(nrow(cur_df) == 0) next
+        p <- ggplot(cur_df, aes(x = controls, y = estimate, color = sig_level))+
+          geom_point()+
+          geom_errorbar(aes(ymin = conf.low, ymax = conf.high))+
+          facet_wrap(.~term_short)+
+          labs(x = 'Controls',
+               y = 'Effect Size',
+               title = cur_outcome)
+         print(p)
+       }
+    }
+  }
+  
+  
+  #save master df at fp
+  write.csv(reg_master_df, fp)
+  #return master df
+  return(reg_master_df)
+}
+```
+
+## RQ 1: Do defendants who otherwise look the same receive harsher punishments (longer sentences, higher fines) according to their demographic characteristics?
+
+```{r}
+#run descriptive analysis on defendant characteristics
+df <- descriptive_analysis(df_short, '../03_results/exploratory/rq1_defendant_outcomes.csv', 'all', TRUE, defendant_chars_descriptive)
+
+
+```
+
+```{r}
+#run regression analysis on defendant characteristics
+df <- regression_analysis(df_short, '../03_results/exploratory/rq1_regression_results.csv', 'all', TRUE, defendant_chars_regression, c())
+```
+
+## RQ 2: Which crimes have the largest disparities when it comes to equal treatment?
+
+```{r}
+dir.create('../03_results/exploratory/rq2', showWarnings = F)
+dir.create('../03_results/exploratory/rq2/defendant', showWarnings = F)
+
+#set up master df
+rq2_master_df_regr <- data.frame()
+
+#loop over conviction variables
+for (column in sections_regression) {
+  #restrict dataset to individuals who have been convicted of a certain crime
+  crime_df <- df_short %>% filter(.data[[column]] == 1)
+
+  # Check the number of rows in crime_df
+  if (nrow(crime_df) <= 100) {
+    next  # Skip the current iteration if crime_df has 100 or more rows
+  }
+  
+  if (column == "convicted_stay_of_execution_(conditional_imprisonment_)") 
+    {
+      next
+    }
+  
+  print(column)
+  
+  #set up filenames to save results
+  filename_regression <- paste0('../03_results/exploratory/rq2/defendant/', column, '_regression.csv')
+  filename_descriptive <- paste0('../03_results/exploratory/rq2/defendant/', column, '_descriptive.csv')
+  
+  #run regression analysis for dataset restricted by crime
+  cur_df <- regression_analysis(crime_df, filename_regression, column, FALSE, defendant_chars_regression, c())
+  #run descriptive analysis for dataset restricted by crime
+  df <- descriptive_analysis(crime_df, filename_descriptive, column, FALSE,defendant_chars_descriptive)
+  
+  #bind regression results to master df
+  rq2_master_df_regr <- rq2_master_df_regr %>%
+    bind_rows(cur_df)
+}
+```
+
+```{r rq2 results analysis}
+#restrict regression results to results that are significant at p < 0.05 and models with full controls
+rq2_sig_fc <- rq2_master_df_regr %>%
+  filter(controls == 'Conv.', p.value < 0.05)
+
+#save significant results
+write.csv(rq2_sig_fc, '../03_results/exploratory/rq2_significant_results.csv')
+
+#find crimes for which punishments are most likely to correlate with defendants' demographics
+top_crimes <- rq2_sig_fc %>%
+  group_by(restriction) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_crimes, n = 10))
+
+#find defendant characteristics that affect the severity of judgements for the greatest number of crimes
+#(counting each outcome separately)
+top_char_all_outcomes <- rq2_sig_fc %>%
+  group_by(term) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_char_all_outcomes))
+
+#find defendant characteristics that affect the severity of judgements for the greatest number of crimes
+#(not counting each outcome separately)
+top_char_sections <- rq2_sig_fc %>%
+  group_by(term, restriction) %>%
+  count() %>%
+  group_by(term) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_char_sections, n = 10))
+
+#types of outcomes that are associated with defendants' demographics the most frequently
+top_outcomes <- rq2_sig_fc %>%
+  group_by(outcome) %>%
+  count() %>%
+  arrange(desc(n))
+print(top_outcomes)
+
+#find which defendant demographic is most frequently related to which outcome
+defendant_outcome_freq <- as.data.frame(table(rq2_sig_fc$term, rq2_sig_fc$outcome)) %>% 
+  arrange(desc(Freq))
+print(defendant_outcome_freq)
+
+#set up variable that is one if the effect is positive (characteristic leads to higher number in the outcome category)
+rq2_sig_fc <- rq2_sig_fc %>%
+  dplyr::mutate(positive_sign = ifelse(estimate > 0, 1, 0))
+
+#find which defendant characteristic leads to increases/decreases in the outcome category most frequently
+defendant_outcome_freq_pos <- as.data.frame(table(rq2_sig_fc$term, rq2_sig_fc$outcome, rq2_sig_fc$positive_sign)) %>% 
+  arrange(desc(Freq)) %>%
+  rename(defendant_char = Var1,
+         outcome = Var2,
+         positive_sign = Var3)
+
+#find which defendant characteristic is associated with increases in the outcome category the greatest number of times
+defendant_outcome_freq_pos %>%
+  filter(positive_sign == 1) %>%
+  head(n = 10) %>%
+  print()
+
+#find which defendant characteristic is associated with decreases in the outcome category the greatest number of times
+defendant_outcome_freq_pos %>%
+  filter(positive_sign == 0) %>%
+  head(n = 10) %>%
+  print()
+```
+
+```{r top crimes}
+#For each defendant characteristic and outcome category, find crimes for which there is a significant effect
+#print the crimes where the effect is the biggest
+for(cur_defendant in defendant_chars_regression){
+  for(cur_outcome in outcomes_regression){
+    cur_df <- rq2_sig_fc %>%
+      dplyr::select(term, outcome, restriction, estimate, p.value) %>%
+      dplyr::rename(characteristic = term,
+                    crime = restriction) %>%
+      filter(characteristic == cur_defendant, outcome == cur_outcome) %>%
+      slice_max(abs(estimate), n = 10) %>%
+      print()
+  }
+}
+```
+
+```{r}
+# Icebox for now
+# 
+# prefix <- "chapter_convicted"
+# 
+# prefix_columns <- grep(paste0("^", prefix), names(df_short), value = TRUE)
+# 
+# rq2_master_df_regr <- data.frame()
+# 
+# for (column in prefix_columns) {
+#   crime_df <- df_short %>% filter(.data[[column]] == 1)
+# 
+#   # Check the number of rows in crime_df
+#   if (nrow(crime_df) <= 200) {
+#     next  # Skip the current iteration if crime_df has 100 or more rows
+#   }
+#   
+#   print(column)
+#   
+#   filename_regression <- paste0('../03_results/exploratory/rq2/chapter/', column, '_regression.csv')
+#   filename_descriptive <- paste0('../03_results/exploratory/rq2/chapter/', column, '_descriptive.csv')
+#   
+#   cur_df <- regression_analysis(crime_df, filename_regression, column, FALSE,defendant_chars_regression, c())
+#   df <- descriptive_analysis(crime_df, filename_descriptive, column, FALSE,defendant_chars_descriptive)
+#   rq2_master_df_regr <- rq2_master_df_regr %>%
+#     bind_rows(cur_df)
+# }
+
+```
+
+## RQ 3: Do the demographics of lay judges correlate to disparate sentencing outcomes when it comes to equal treatment?
+
+```{r}
+#run descriptive analysis for judge characteristics
+df <- descriptive_analysis(df_short, '../03_results/exploratory/rq3_judge_outcomes.csv', 'all', TRUE,judge_chars_descriptive)
+
+#run regression analysis for defendant characteristics
+df <- regression_analysis(df_short, '../03_results/exploratory/rq3_judge_regression_results.csv', 'all', TRUE,judge_chars_regression, defendant_chars_regression, c('judge_party', 'case_district_court'))
+```
+
+## RQ 3b: What are the crimes that have the strongest correlation between judge characteristics and outcomes?
+
+```{r Judge by outcome}
+dir.create('../03_results/exploratory/rq2/', showWarnings = F)
+dir.create('../03_results/exploratory/rq2/judge/', showWarnings = F)
+
+#extract all dummy variables for individual crimes people were convicted of
+prefix <- "convicted_"
+prefix_columns <- grep(paste0("^", prefix), names(df_short), value = TRUE)
+
+#set up master df
+rq3a_master_df_regr <- data.frame()
+
+#loop over crime variables
+for (column in prefix_columns) {
+  
+  #restrict data frame to people convucted of individual crimes
+  crime_df <- df_short %>% filter(.data[[column]] == 1)
+
+  # Check the number of rows in crime_df
+  if (nrow(crime_df) <= 100) {
+    next  # Skip the current iteration if crime_df has 100 or fewer rows
+  }
+  
+  print(column)
+  
+  #set up filepaths to save results in
+  filename_regression <- paste0('../03_results/exploratory/rq2/judge/', column, '_regression.csv')
+  filename_descriptive <- paste0('../03_results/exploratory/rq2/judge/', column, '_descriptive.csv')
+  
+  #run regression analysis for dfs restricted to people convicted of individual crimes
+  cur_df <- regression_analysis(crime_df, filename_regression, column, FALSE,judge_chars_regression, defendant_chars_regression)
+  
+  #bind to master df
+  rq3a_master_df_regr <- rq3a_master_df_regr %>%
+    bind_rows(cur_df)
+}
+```
+
+```{r rq3a results analysis}
+#restrict master df to models with full controls and results that were significant at the p < 0.05 level
+rq3a_sig_fc <- rq3a_master_df_regr %>%
+  filter(controls == 'Conv.', p.value < 0.05)
+
+#save df with significant results
+write.csv(rq3a_sig_fc, '../03_results/exploratory/rq3a_significant_results.csv')
+
+#find crimes where outcomes were most commonly associated with judges' demographics
+top_crimes <- rq3a_sig_fc %>%
+  group_by(restriction) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_crimes, n = 10))
+
+#find judges' characteristics that are significantly associated with outcomes for the lparamest number of individual crimes
+#multiple outcomes per crime are counted multiple times
+top_char_all_outcomes <- rq3a_sig_fc %>%
+  group_by(term) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_char_all_outcomes))
+
+#find judges' characteristics that are significantly associated with outcomes for the lparamest number of individual crimes
+#multiple outcomes per crime are counted a single time
+top_char_sections <- rq3a_sig_fc %>%
+  group_by(term, restriction) %>%
+  count() %>%
+  group_by(term) %>%
+  count() %>%
+  arrange(desc(n))
+print(head(top_char_sections, n = 10))
+
+#find outcomes that are associated with judges' characteristics for the greatest number of crimes
+top_outcomes <- rq3a_sig_fc %>%
+  group_by(outcome) %>%
+  count() %>%
+  arrange(desc(n))
+print(top_outcomes)
+
+#find which judge characteristic is associated with which outcome for the greatest number of crimes
+judge_outcome_freq <- as.data.frame(table(rq3a_sig_fc$term, rq3a_sig_fc$outcome)) %>% 
+  arrange(desc(Freq))
+print(judge_outcome_freq)
+
+#set up variable for whether impact on outcome was positive or negative
+rq3a_sig_fc <- rq3a_sig_fc %>%
+  dplyr::mutate(positive_sign = ifelse(estimate > 0, 1, 0))
+
+#find which judge characteristic is associated with increases/decreases
+#in outcome variables for the greatest number of crimes
+judge_outcome_freq_pos <- as.data.frame(table(rq3a_sig_fc$term, rq3a_sig_fc$outcome, rq3a_sig_fc$positive_sign)) %>% 
+  arrange(desc(Freq)) %>%
+  rename(defendant_char = Var1,
+         outcome = Var2,
+         positive_sign = Var3)
+
+#find judge charactistics that lead to increases in an outcome variable for the greatest number of crimes
+judge_outcome_freq_pos %>%
+  filter(positive_sign == 1) %>%
+  head(n = 10) %>%
+  print()
+
+#find judge charactistics that lead to decreases in an outcome variable for the greatest number of crimes
+judge_outcome_freq_pos %>%
+  filter(positive_sign == 0) %>%
+  head(n = 10) %>%
+  print()
+```
+
+```{r}
+#find crimes where judges' characteristics have the biggest impact on sentencing outcomes
+for(cur_judge in judge_chars_regression){
+  for(cur_outcome in outcomes_regression){
+    cur_df <- rq3a_sig_fc %>%
+      dplyr::select(term, outcome, restriction, estimate, p.value) %>%
+      dplyr::rename(characteristic = term,
+                    crime = restriction) %>%
+      filter(characteristic == cur_judge, outcome == cur_outcome) %>%
+      slice_max(abs(estimate), n = 10) %>%
+      print()
+  }
+}
+```
+
+```{r RQ 3 descriptives}
+### FUNCTION: descriptive_analysis_2d ###
+# @param raw_df: df that contains all variables contained in other paramuments
+# @param fp: filepath to save results spreadsheet (needs to end in '.csv')
+# @param column: If raw_df was restricted in some way, this can be indicated here
+# @param print: boolean to indicate if graphs should be generated
+# @param vars_d1: vector of (string) variables to pivot over
+# @param vars_d2: vector of (string) variables to pivot over
+#
+# @returns: spreadsheet of pivot results
+#
+# @process: pivot raw_df by each combination of variables in in vars_d1 and vars_d2, calculate means for each
+# variable in outcomes_descriptive, and add variable counts.
+# Display means broken down by outcomes and each variable combination
+descriptive_analysis_2d <- function(raw_df, fp, column, print, vars_d1, vars_d2){
+  desc_master_df <- data.frame()
+  #loop over variables in vars_d1
+  for(v1 in vars_d1){
+    
+    #loop over variables in vars_d2
+    for(v2 in vars_d2){
+      if(v1 == v2) next
+      if(print) print(paste0(v1, ': ', v2))
+      
+      
+      #group raw_df by current variables v1 and v2 and calculate mean values for each outcome variable
+      cur_df <- raw_df %>%
+        group_by_at(vars(v1, v2)) %>%
+        summarise_at(.vars = outcomes_descriptive, .funs = mean, na.rm = T)
+        
+      
+      #calculate count (number of observations) for the variable combinations
+      cur_df_count <- raw_df %>%
+        group_by_at(vars(v1, v2)) %>%
+        count()
+      
+      #join count and outcome mean table and rename variables
+      cur_df <- cur_df %>%
+      left_join(cur_df_count, by = c(v1, v2)) %>%
+      rename(v1_value = v1,
+             v2_value = v2) %>%
+      mutate(v1_value = as.character(v1_value),
+             v2_value = as.character(v2_value),
+             v1 = v1,
+             v2 = v2,
+             restriction = column)
+      
+      #bind summary table to master df
+      desc_master_df <- desc_master_df %>%
+        bind_rows(cur_df)
+    }
+  }
+  #if print is set to true
+  if(print){
+    #pivot master df to longer for graphical display
+    desc_master_df_short <- desc_master_df %>%
+      pivot_longer(cols = all_of(outcomes_descriptive), names_to = 'outcome_char', values_to = 'outcome_value') %>%
+      filter(!is.na(v1_value), !is.na(v2_value))
+    #loop over variables in vars_d1
+    for(cur_v1 in vars_d1){
+      
+      #loop over variables in vars_d2
+      for(cur_v2 in vars_d2){
+        
+        #loop over outcome variables in outcomes_descriptive
+        for(outcome_var in outcomes_descriptive){
+          #restrict master df by current v1, v2, and outcome variable
+          cur_df <- desc_master_df_short %>%
+            dplyr::filter(v1 == cur_v1, v2 == cur_v2, outcome_char == outcome_var)
+          
+          if(length(unique(cur_df$v2_value)) < 1) next
+          
+          #plot descriptive results: x-axis are the values that can be taken on by v1, y-axis is the outcome mean
+          # facets are the values that v2 can take on
+          p <- ggplot(cur_df, aes(x = v1_value, y = outcome_value))+
+                geom_bar(stat = 'identity', position = 'dodge')+
+                facet_wrap(.~v2_value)+
+                labs(title = paste0(outcome_var, ': ', cur_v1, ' x ', cur_v2),
+                     subtitle = paste0(outcome_var, ' by ', cur_v1, ' (x-axis) \nand ', cur_v2, ' (grid)'),
+                     x = cur_v1,
+                     y = outcome_var)+
+                theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0))
+          print(p)
+        }
+      }
+    }
+  }
+  #save master df
+  write.csv(desc_master_df, fp)
+  #return master df
+  return(desc_master_df)
+}
+```
+
+```{r}
+### FUNCTION: regression_analysis_2d ###
+# @param raw_df: df that contains all variables contained in other paramuments
+# @param fp: filepath to save results spreadsheet (needs to end in '.csv')
+# @param column: If raw_df was restricted in some way, this can be indicated here
+# @param print: boolean to indicate if graphs should be generated
+# @param vars_d1: vector of (string) variables
+# @param vars_d2: vector of (string) variables
+#
+# @returns: spreadsheet of regression results
+#
+# @process: loop over each variable combination in vars_d1 and vars_d2 and each outcome in outcomes_regressions.
+# Regress outcome on interaction of variable combination without controls (None), controlling for all variables in vars_d1 and vars_d2,
+# and the above-mentioned controls plus dummy variables for each conviction section ('Conv.').
+# Display results for each variable combination by outcome and model type (i.e., the level of controls).
+regression_analysis_2d <- function(raw_df, fp, column, print, vars_d1, vars_d2){
+  #set up master df
+  reg_master_df <- data.frame()
+  
+  #loop over variables in vars_d1
+  for(v1 in vars_d1){
+    
+    #loop over variables in vars_d2
+    for(v2 in vars_d2){
+      if(v1 == v2) next
+      if(print) print(paste0(v1, ': ', v2))
+      
+      #loop over variables in outcomes_regression
+      for(outcome in outcomes_regression){
+        
+        #set up formula for interaction effect between v1 and v2 without any controls
+        fr <- paste0(outcome, ' ~ ', v1, '*', v2)
+        
+        #fit; catch errors
+        cur_fit <- try(lm(formula = fr, data = raw_df))
+        if(is(cur_fit, 'try-error')){
+          print(paste0('Failed: ', fr))
+          next
+        }
+        
+        #convert model to df and format variables
+        cur_fit_df <- cur_fit %>%
+          tidy(conf.int = T, conf.level = 0.95) %>%
+          as.data.frame() %>%
+          filter(grepl(v1, term), grepl(v2, term)) %>%
+          mutate(outcome = outcome,
+                 sig_level = case_when(p.value < 0.01 ~ '***',
+                                       p.value < 0.05 ~ '**',
+                                       p.value < 0.1 ~ '*',
+                                       .default = 'insig'),
+                 controls = 'None',
+                 restriction = column) %>%
+          separate(col = term, into = c('judge_char', 'defendant_char'), sep = ':', remove = F)
+        
+        #save regression results to master df
+        reg_master_df <- reg_master_df %>%
+          bind_rows(cur_fit_df)
+        
+        #set up control vector by combining vars_d1 and vars_d2 and removing variables currently used for interaction effect
+        controls <- unique(c(vars_d1, vars_d2))
+        controls <- controls[!controls %in% c(v1, v2)]
+        
+        #set up formula with controls
+        fr_pers <- paste(c(fr, controls), collapse = ' + ')
+        
+        #run model; catch errors
+        cur_fit_pers <- try(lm(formula = fr_pers, data = raw_df))
+        if(is(cur_fit_pers, 'try-error')){
+          print(paste0('Failed: ', fr))
+          next
+        }
+        
+        #convert to df and format variables
+        cur_fit_pers_df <- cur_fit_pers %>%
+          tidy(conf.int = T, conf.level = 0.95) %>%
+          as.data.frame() %>%
+          filter(grepl(v1, term), grepl(v2, term)) %>%
+          mutate(outcome = outcome,
+                 sig_level = case_when(p.value < 0.01 ~ '***',
+                                       p.value < 0.05 ~ '**',
+                                       p.value < 0.1 ~ '*',
+                                       .default = 'insig'),
+                 controls = 'Pers.',
+                 restriction = column)%>%
+          separate(col = term, into = c('judge_char', 'defendant_char'), sep = ':', remove = F)
+        
+        #save results in master df
+        reg_master_df <- reg_master_df %>%
+          bind_rows(cur_fit_pers_df)
+        
+        #set up df and only keep outcome, control and conviction variables
+        df_restricted <- raw_df %>%
+          dplyr::select(all_of(c(outcome, v1, v2, controls, sections_regression, circs_regression)))
+        
+        #set up formula for Conv. model
+        fr_conv <- paste0(fr, ' + .')
+        
+        #run model; catch errors
+        cur_fit_conv <- try(lm(formula = fr_conv, data = df_restricted))
+        if(is(cur_fit_conv, 'try-error')){
+          print(paste0('Failed: ', fr))
+          next
+        }
+        
+        #convert model to df and format variables
+        cur_fit_conv_df <- cur_fit_conv %>%
+          tidy(conf.int = T, conf.level = 0.95) %>%
+          as.data.frame() %>%
+          filter(grepl(v1, term), grepl(v2, term)) %>%
+          mutate(outcome = outcome,
+                 sig_level = case_when(p.value < 0.01 ~ '***',
+                                       p.value < 0.05 ~ '**',
+                                       p.value < 0.1 ~ '*',
+                                       .default = 'insig'),
+                 controls = 'Conv.',
+                 restriction = column)%>%
+          separate(col = term, into = c('judge_char', 'defendant_char'), sep = ':', remove = F)
+        
+        #save results to master df
+        reg_master_df <- reg_master_df %>%
+          bind_rows(cur_fit_conv_df)
+      }
+    }
+  }
+  
+  #set up factors for model types
+  reg_master_df$controls <- factor(reg_master_df$controls, levels = c('None', 'Pers.', 'Conv.'))
+  
+  #if print is set to true
+  if(print){
+    #loop over unique elements in 'judge_char' variable
+    for(v1 in unique(reg_master_df$judge_char)){
+      #loop over unique elements in 'defendant_char' variable
+      for(v2 in unique(reg_master_df$defendant_char)){
+        
+        #restrict master df to results for the current judge_char and defendant_char
+        cur_df <- reg_master_df %>%
+           filter(grepl(v1, term), grepl(v2, term))
+        
+        if(nrow(cur_df) == 0 | length(unique(cur_df$outcome)) < 1) next
+        
+        #plot regression results; x-axis is the model type, y-axis is the effect size, color is the significance level,
+        #facet is the outcome type
+        p <- ggplot(cur_df, aes(x = controls, y = estimate, color = sig_level))+
+          geom_point()+
+          geom_errorbar(aes(ymin = conf.low, ymax = conf.high))+
+          facet_wrap(.~outcome, scales = 'free')+
+          labs(x = 'Controls',
+               y = 'Effect Size',
+               title = paste0(v1, ' x ', v2))
+         print(p)
+      }
+    }
+  }
+  
+  #save master df at fp
+  write.csv(reg_master_df, fp)
+  #return master df
+  return(reg_master_df)
+}
+
+```
+
+##RQ 3c: How do lay judge demographics interact with defendant demographics when it comes to equal treatment?
+
+```{r}
+dir.create('../03_results/exploratory/rq3', showWarnings = F)
+
+#run descriptive_analysis_2d for judge and defendant demographic characteristics
+df <- descriptive_analysis_2d(df_short, '../03_results/exploratory/rq3/high_level_descriptives.csv', '', TRUE, judge_chars_descriptive, defendant_chars_descriptive)
+#run regression_analysis_2d for judge and defendant demographic characteristics
+reg_df <- regression_analysis_2d(df_short, '../03_results/exploratory/rq3/high_level_regression.csv', '', TRUE, judge_chars_regression, defendant_chars_regression)
+
+```

@@ -1,0 +1,612 @@
+---
+title: "Robustness Checks"
+author: "Justin Braun"
+date: "2024-12-27"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## Set up & and prep data
+
+```{r load packages}
+#load packages
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(readxl)
+require(openxlsx)
+require(broom)
+require(stringr)
+library(sjPlot)
+library(sjmisc)
+library(purrr)
+library(lmtest)
+library(sandwich)
+library(estimatr)
+library(stats)
+library(tibble)
+library(MASS)
+library(car)
+library(corrplot)
+library(tipr)
+require(sensemakr)
+library(margins)
+library(robust)
+```
+
+```{r load data}
+#load short data frame: case x defendant level
+df_short <- readxl::read_excel('../01_preprocessed_data/hidden/full_short.xlsx') %>%
+  mutate(punishment_prison_days_conditiional = as.numeric(punishment_prison_days_conditiional),
+         case_district_court = relevel(factor(case_district_court), "Oslo tingrett"))#reorder factor for regr. analysis
+```
+
+```{r prep config}
+### FUNCTION: extract_vars ###
+# @param cur_fp: filepath to spreadsheet containing variable list
+# @param cur_sheet: sheet name containing variable list
+#
+# returns: vector of variables
+extract_vars <- function(cur_fp, cur_sheet){
+  cur_df <- readxl::read_excel(cur_fp, sheet = cur_sheet)
+  return(cur_df$vars)
+}
+
+fp_desc <- '../02_config/config_descriptives.xlsx' #file path for descriptive variables
+fp_regr <- '../02_config/config_regression.xlsx' #file path for regression variables
+
+#load variables into vectors
+defendant_chars_descriptive <- extract_vars(fp_desc, 'defendant_chars')
+judge_chars_descriptive <- extract_vars(fp_desc,'judge_chars')
+outcomes_descriptive <- extract_vars(fp_desc, 'outcomes')
+
+defendant_chars_regression <- extract_vars(fp_regr, 'defendant_chars')
+judge_chars_regression <- extract_vars(fp_regr,'judge_chars')
+outcomes_regression <- extract_vars(fp_regr, 'outcomes')
+
+
+circs_regression <- openxlsx::read.xlsx('../02_config/aggravating_mitigating_circs.xlsx')$col
+sections_regression <- openxlsx::read.xlsx('../02_config/sections.xlsx')$col
+sections_descriptive <- sections_regression
+
+#set up output filepath/folder
+output_fp <- '../03_results/robustness_checks/'
+dir.create(output_fp, showWarnings = F)
+```
+
+```{r}
+#set up dataframe that contains only people who receive prison sentences & logged DV
+df_short_prison_only <- df_short %>%
+  filter(punishment_prison_days > 0) %>%
+  mutate(punishment_prison_days_log = log(punishment_prison_days))
+```
+
+## Descriptive Data Tables
+```{r}
+#function that computes summary statistics for variable in df
+iv_summary_stats <- function(df, variable){
+  summary_row <- df %>%
+    summarise(var = variable,
+      min = min(!!sym(variable), na.rm = T),
+      mean = mean(!!sym(variable), na.rm = T),
+      median = median(!!sym(variable), na.rm = T),
+      max = max(!!sym(variable), na.rm = T),
+      sd = sd(!!sym(variable), na.rm = T),
+      NA_count = sum(is.na(!!sym(variable))))
+  return(summary_row)
+}
+
+#compute summary statistics for judge and defendant characteristics as well as punishment variables
+summary_df_ivs_dvs <- map_df(c(judge_chars_regression, defendant_chars_regression, outcomes_regression), ~ iv_summary_stats(df_short, .x))
+
+#save summary stats
+write.csv(summary_df_ivs_dvs, paste0(output_fp, 'summary_ivs_dvs.csv'))
+
+#function that computes summary stats for sections, including typical prison sentences
+section_summary_stats <- function(df, variable){
+  summary_row <- df %>%
+    filter(!!sym(variable) == 1) %>%
+    summarise(
+      section = variable,
+      count = n(),
+      min_prison_time = min(punishment_prison_days, na.rm = T),
+      mean_prison_time = mean(punishment_prison_days, na.rm = T),
+      median_prison_time = median(punishment_prison_days, na.rm = T),
+      max_prison_time = max(punishment_prison_days, na.rm = T),
+      sd_prison_time = sd(punishment_prison_days, na.rm = T),
+      share_prison_time = sum(punishment_prison_days > 0, na.rm = T)/count
+    )
+}
+#compute summary statistics for all sections in our dataset
+summary_df_sections <- map_df(sections_regression, ~ section_summary_stats(df_short, .x))
+
+#save
+write.csv(summary_df_sections, paste0(output_fp, 'summary_sections.csv'))
+```
+
+
+## Negative binomial models
+```{r}
+mean(df_short$punishment_prison_days, na.rm = T)
+var(df_short$punishment_prison_days, na.rm = T)
+```
+
+Mean is much lower than variance: over-dispersion is present!
+
+```{r}
+#basic model to check main effects for judges and defendants
+fr <- paste0('punishment_prison_days ~ ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression), collapse = ' + '))
+
+#use full dataset because the reason for using negative binomial model is to deal with the over-dispersion of zeroes from defendants who weren't convicted for any prison time
+fit_basic <- glm.nb(formula = as.formula(fr), data = df_short) 
+#convert model to tidy df structure and save 
+fit_basic_df <- fit_basic %>%
+  tidy() %>%
+  mutate(sig_level = case_when(p.value < 0.01 ~ '***',
+                               p.value < 0.05 ~ '**',
+                               p.value < 0.1 ~ '*',
+                               .default = 'not sig.'))
+write.csv(fit_basic_df, paste0(output_fp, 'nbreg_basic.csv'))
+
+
+#interaction model to check interaction between defendant gender and migration background
+fr_gender_migr_brackground <- paste0('punishment_prison_days ~ defendant_is_woman * defendant_some_foreign_background + ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression), collapse = ' + '))
+
+fit_gender_migr_background<- glm.nb(formula = as.formula(fr_gender_migr_brackground), data = df_short)
+fit_gender_migr_background_df <- fit_gender_migr_background %>%
+  tidy() %>%
+  mutate(sig_level = case_when(p.value < 0.01 ~ '***',
+                               p.value < 0.05 ~ '**',
+                               p.value < 0.1 ~ '*',
+                               .default = 'not sig.'))
+write.csv(fit_gender_migr_background_df, paste0(output_fp, 'nbreg_gender_migr_background.csv'))
+
+#interaction model to check interaction between judge age and defendant migration background
+fr_judge_age_migr_brackground <- paste0('punishment_prison_days ~ judge_age * defendant_some_foreign_background + ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression), collapse = ' + '))
+
+fit_judge_age_migr_background<- glm.nb(formula = as.formula(fr_judge_age_migr_brackground), data = df_short)
+fit_judge_age_migr_background_df <- fit_judge_age_migr_background %>%
+  tidy() %>%
+  mutate(sig_level = case_when(p.value < 0.01 ~ '***',
+                               p.value < 0.05 ~ '**',
+                               p.value < 0.1 ~ '*',
+                               .default = 'not sig.'))
+write.csv(fit_judge_age_migr_background_df, paste0(output_fp, 'nbreg_judge_age_migr_background.csv'))
+
+```
+
+Interpretation: each unit increase in IV is associated with beta1 log units in DV.
+
+
+## VIF
+```{r}
+#calculate correlation matrix
+cor_matrix <- cor(df_short[c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression)], use = "complete.obs")
+
+#compute VIF for main model
+fit_basic_ols <- lm(fr, data = df_short)
+vif <- vif(fit_basic_ols)
+
+vif
+```
+A few variables exhibit high degrees of multicollinearity. Specifically, 'convicted_acquisition_possession_and_use_of_drugs' and 'convicted_section_24_of_the_medicines_act_other' as well as 'convicted_road_traffic_act_other_1' and 'convicted_violating_traffic_signage_act' are highly correlated. Since none of these variables are explanatory variables of interest, multicollinearity should be of no concern!
+
+
+## Sensitivity to confounding bias
+Note: I chose to use vanilla OLS standard errors for these sensitivity tests because they were generally (and somewhat surprisingly) larger than clustered standard errors.
+```{r}
+#Independent variables for which to conduct sensitivity analysis
+senstivity_df <- data.frame(treatments_to_analyze = c('defendant_is_woman', 'defendant_log_net_income', 'defendant_age', 'judge_age'))
+
+#function to identify variable most correlated in absolute terms with target_var except target_var itself
+find_most_correlated_var <- function(cor_matrix, target_var){
+  diag(cor_matrix) <- NA
+  cor_matrix <- abs(cor_matrix)
+  return(names(which.max(cor_matrix[target_var,])))
+}
+
+#for each of the IVs of interest identify the circ variable it is most correlated with
+senstivity_df$benchmark <- map(senstivity_df$treatments_to_analyze, ~ find_most_correlated_var(cor_matrix[,circs_regression], .x))
+
+#restrict data set to cases that resulted in prison time and add logged prison days variable
+data_restricted <- df_short %>%
+  filter(punishment_prison_days > 0) %>%
+  mutate(punishment_prison_days_logged = log(punishment_prison_days))
+
+#run additional model, analogous to 'reportable_figures.Rmd': prison days only and logged prison days variable
+fr_logged <- paste0('punishment_prison_days_logged ~ ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression), collapse = ' + '))
+fit_restricted_ols <- lm(formula = fr, data = data_restricted)
+fit_restricted_ols_logged <- lm(formula = fr_logged, data = data_restricted)
+
+#dataframe that maps each IV to the three models
+senstivity_df_expanded <- expand_grid(senstivity_df, model = c('fit_basic_ols', 'fit_restricted_ols', 'fit_restricted_ols_logged')) %>%
+  mutate(benchmark = as.character(benchmark))
+
+#function to run sensemaker sensitivity analyses on 'treatment' in 'model' relative to 'benchmark'
+sensitivity_analysis <- function(model, treatment, benchmark){
+  se <- summary(model)$coefficients[, "Std. Error"]  
+  model_sensitivity <- sensemakr(model = model,
+                                 treatment = treatment,
+                                 benchmark_covariates = benchmark,
+                                 alpha = 0.05,
+                                 q = 1,
+                                 kd = 1:3, 
+                                 se = se)
+  print(model_sensitivity)
+  plot(model_sensitivity) #effect size sensitivity
+  plot(model_sensitivity, sensitivity.of = 't-value') #significance sensitivity
+  plot(model_sensitivity, type = 'extreme') #sensitivity to a confounder that explains all of the remaining variance in the DV
+}
+
+
+#run sensitivity tests for each IV of interest and each model
+for(i in 1:nrow(senstivity_df_expanded)){
+  cur_row <- senstivity_df_expanded[i,]
+  print(paste0('Analyzing ', cur_row$treatments_to_analyze[1], ' in ', cur_row$model[1], ' for OVB using ', cur_row$benchmark[1], ' as a benchmark'))
+  sensitivity_analysis(get(cur_row$model[1]), cur_row$treatments_to_analyze[1], cur_row$benchmark[1])
+}
+
+```
+
+Interpretation: I used the aggravating/mitigating circumstance most correlated with the IV as a benchmark. 
+-  Partial R2 of treatment with outcome: How much of the variance in the outcome variable is explained by the IV
+-  Robustness Value, q = 1: if an unobserved confounder explains all of the unexplained variance in the DV, how much of the unexplained variance in the IV would it need to explain for its effect to go to zero
+- Robustness Value, q = 1 alpha = 0.05: if an unobserved confounder explains all of the unexplained variance in the DV, how much of the unexplained variance in the IV would it need to explain for its effect to no longer be significant
+- First plot: Red line: how much of the unexplained variance in the DV (vertical axis) and IV (horizontal axis) would an unobserved confounder have to explain in order to drive the IV's effect to zero. Red squares: what would the impact of a confounder like the benchmark confounder be? different squares are multiples of the strength of the observed confounder
+- Second plot: Red line: how much of the unexplained variance in the DV (vertical axis) and IV (horizontal axis) would an unobserved confounder have to explain in order to drive the IV's significance away. Red squares: what would the impact of a confounder like the benchmark confounder be? different squares are multiples of the strength of the observed confounder
+- Third plot: for a confounder that explains all of the unexplained variance of the DV, how much of the unexplained variance of the IV would it need to explain to drive the effect to zero. The three red bars are the effect of the observed benchmark confounder
+
+The plots are in increasing order in terms of restrictiveness. I focus on 'fit_restricted_ols_logged' as the main specification of interest (partially because I think it is our best specification, partially because the senstivity estimates are most senstive, and partially because the sensitivity analysis is most easily interpretable visually)
+
+
+Results
+All models without logged DVs appear robust in terms of effect size and significance to OVB. But for the logged DV, the results are less clear cut
+- Defendant gender: Effect size is robust to OVB but significance might fall away if there was OVB. Third plot: gender appears robust to a confounder as strong or slightly stronger than 'repeated offense'
+- Defendant income: Similarly to gender, an unobserved confounder of equal strength to 'repeated offense' could endanger the significance of the result
+- Defendant age is robust to OVB even in terms of its significance. Even an confounder that predicts all of the remaining variance in prison days would need to be substantially stronger than 'group1_aggravating_place' to endanger the effect
+- Judge age: results are robust to OVB in terms of significance and effect size. Even a worst case confounder would need to be substantially stronger than 'confession' in order to eliminate the IV's effect
+
+
+## Binary circs variable
+```{r}
+aggravating_circs <- circs_regression[grepl('aggravating', circs_regression)]
+mitigating_circs <- circs_regression[grepl('mitigating', circs_regression)]
+
+#set up binary variables for aggravating and mitigating circumstances
+df_short <- df_short %>%
+  mutate(aggravating_any = as.integer(if_any(all_of(aggravating_circs), ~ .x > 0)),
+         mitigating_any = as.integer(if_any(all_of(mitigating_circs), ~ .x > 0)))
+
+df_short_prison_only <- df_short_prison_only %>%
+  mutate(aggravating_any = as.integer(if_any(all_of(aggravating_circs), ~ .x > 0)),
+         mitigating_any = as.integer(if_any(all_of(mitigating_circs), ~ .x > 0)))
+
+#independent variables
+ivs <- paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, 'aggravating_any', 'mitigating_any'), collapse = ' + ')
+
+#run three model types: full dataset, prison only/regular dv, prison only/logged dv
+fit_full_dataset <- lm_robust(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short, clusters = judge__id)
+summary(fit_full_dataset)
+
+fit_restricted_dataset <- lm_robust(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short_prison_only, clusters = judge__id)
+summary(fit_restricted_dataset)
+
+fit_restricted_dataset_logged_dv <- lm_robust(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs)), data = df_short_prison_only, clusters = judge__id)
+summary(fit_restricted_dataset_logged_dv)
+```
+
+All of our effects remain robust, but mitigating circumstances are consistently associated with longer prison time. 
+
+```{r}
+cor_circs_sections <- df_short %>%
+  dplyr::select(all_of(sections_regression), 'mitigating_any', 'aggravating_any') %>%
+  cor() %>%
+  as.data.frame() %>%
+  dplyr::select('mitigating_any', 'aggravating_any')
+```
+
+So it seems like mitigating circumstances are correlated with worse crimes and might pick up some of their effects. The solution here seems to be to run full interactions between sections and circs.
+
+```{r}
+#interact every section with the binary circs indicators
+sections_circs_interact <- paste0(paste('mitigating_any *', sections_regression, collapse = ' + '), ' + ', paste('aggravating_any *', sections_regression, collapse = ' + '))
+
+#independent variables
+ivs <- paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, 'mitigating_any', 'aggravating_any', sections_circs_interact), collapse = ' + ')
+
+#run three model types: full dataset, prison only/regular dv, prison only/logged dv
+fit_full_dataset <- lm_robust(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short, clusters = judge__id)
+summary(fit_full_dataset)
+
+fit_restricted_dataset <- lm_robust(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short_prison_only, clusters = judge__id)
+summary(fit_restricted_dataset)
+
+fit_restricted_dataset_logged_dv <- lm_robust(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs)), data = df_short_prison_only, clusters = judge__id)
+summary(fit_restricted_dataset_logged_dv)
+```
+
+
+There remain a lot of positive coefficients on mitigating circumstances interacted with individual crimes and negative coefficients on aggravating circumstances. All of our coefficients of interest remain robust, but this is nonetheless somewhat concerning. My best guess continues to be that mitigating circumstances and crime severity are somewhat correlated (and the reverse for aggravating circumstances) which counteracts the expected effect of these variables.
+Also note that the coefficient on mitigating circumstances is indistinguishable from zero.
+
+## Age squared
+I ran this without robust standard errors, since the metric of interest is the F test of the join hypothesis that the coefficients on age and age^2 are both zero. The F-test should remain unaffected by whether I use robust SEs or not, but the model object from lm_robust doesn't directly include residuals and the indexing is messed up.
+```{r}
+#formula with age squared
+ivs <- paste(c(defendant_chars_regression, 'I(defendant_age^2)', judge_chars_regression, 'I(judge_age^2)', sections_regression, circs_regression), collapse = ' + ')
+
+#ivs for restricted model to run joint significance test
+ivs_R <- paste(c(defendant_chars_regression, 'I(defendant_age^2)', judge_chars_regression[judge_chars_regression != 'judge_age'], sections_regression, circs_regression), collapse = ' + ')
+
+#FULL DATASET
+fit_full_dataset <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short)
+
+#display coefficients for key variables
+fit_full_dataset %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(defendant_chars_regression, 'I(defendant_age^2)', judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_full_dataset, type = 'pred', terms = 'defendant_age [all]')+
+  labs(x = 'Defendant Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of defendant age on prison time',
+        subtitle = 'Full Dataset; untransformed DV')
+
+plot_model(fit_full_dataset, type = 'pred', terms = 'judge_age [all]')+
+  labs(x = 'Judge Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of judge age on prison time',
+        subtitle = 'Full Dataset; untransformed DV')
+
+#run F-test
+fit_full_dataset_R <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs_R)), data = df_short)
+
+
+SSR.UR <- sum(resid(fit_full_dataset)^2, na.rm = T)
+SSR.R <- sum(resid(fit_full_dataset_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_full_dataset)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+#PRISON ONLY
+fit_restricted_dataset <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short_prison_only)
+
+
+#display coefficients for key variables
+fit_restricted_dataset %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(defendant_chars_regression, 'I(defendant_age^2)', judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_restricted_dataset, type = 'pred', terms = 'defendant_age [all]')+
+  labs(x = 'Defendant Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of defendant age on prison time',
+        subtitle = 'Restricted Dataset; untransformed DV')
+
+plot_model(fit_restricted_dataset, type = "pred", terms = "judge_age [all]") +
+  geom_rug(data = fit_restricted_dataset$model, aes(x = judge_age, y = 0), 
+           sides = "b", inherit.aes = FALSE,
+           alpha = 0.2, position = position_jitter(width = 0.2, height = 0)) +
+  labs(
+    x = "Judge Age",
+    y = "Predicted Prison Days",
+    title = "Impact of Judge Age on Prison Time",
+    subtitle = "Restricted Dataset; Untransformed DV"
+  )
+
+ggsave(paste0(output_fp, 'judge_age_prison_only.svg'), plot = last_plot(), width = 8, height = 6)
+
+
+#run F-test
+fit_restricted_dataset_R <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs_R)), data = df_short_prison_only)
+
+
+SSR.UR <- sum(resid(fit_restricted_dataset)^2, na.rm = T)
+SSR.R <- sum(resid(fit_restricted_dataset_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_restricted_dataset)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+
+#PRISON ONLY LOGGED DV
+fit_restricted_dataset_logged_dv <- lm(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs)), data = df_short_prison_only)
+
+fit_restricted_dataset_logged_dv %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(defendant_chars_regression, 'I(defendant_age^2)', judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_restricted_dataset_logged_dv, type = 'pred', terms = 'defendant_age [all]')+
+  labs(x = 'Defendant Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of defendant age on prison time',
+        subtitle = 'Restricted Dataset; Logged DV')
+
+plot_model(fit_restricted_dataset_logged_dv, type = 'pred', terms = 'judge_age [all]')+
+  labs(x = 'Judge Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of judge age on prison time',
+        subtitle = 'Restricted Dataset; logged DV')
+
+#run F-test
+fit_restricted_dataset_logged_dv_R <- lm(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs_R)), data = df_short_prison_only)
+
+
+SSR.UR <- sum(resid(fit_restricted_dataset_logged_dv)^2, na.rm = T)
+SSR.R <- sum(resid(fit_restricted_dataset_logged_dv_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_restricted_dataset_logged_dv)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+```
+
+None of the other coefficients are affected in terms of significance
+Defendant age clearly has a quadratic effect that is highly significant. Judge age essentially has a linear effect until around age 70 BUT if quadratic term is included, both terms lack significance. However, the joint hypothesis that both terms are zero can be rejected using the F-test (ie judge age has a significant effect).
+
+### Test if the age effect is driven by a discontinuity around 45
+```{r}
+#plot residuals against judge age
+age_residual_restricted_df <- data.frame(judge_age = fit_restricted_dataset$model$judge_age,
+                                   resid = fit_restricted_dataset$residuals)
+ggplot(data = age_residual_restricted_df, aes(x = judge_age, y = resid))+
+  geom_point()
+
+```
+It does appear that our model is especially likely to underpredict the true punishment handed out by judges in their middle ages. So these are cases where our model thinks that the true punishment should be much shorter than the verdict that was handed down. Let's see what happens to our coefficients if we introduce binary age bracket variables.
+
+```{r}
+#age cutoffs to test
+age_cutoff_vec <- c(35, 40, 45, 50, 55)
+fr <- paste0('punishment_prison_days ~ ', paste(c(defendant_chars_regression, judge_chars_regression, 'judge_age_cutoff', 'judge_age*judge_age_cutoff', 
+                                                  sections_regression, circs_regression), collapse = ' + '))
+
+#Run 'RDD' type models which allow for discontinuity at cutoff
+for(age_cutoff in age_cutoff_vec){
+  print(paste0('Age cutoff: ', age_cutoff))
+  df_short_prison_only <- df_short_prison_only %>%
+    mutate(judge_age_cutoff = ifelse(judge_age > age_cutoff, 1, 0))
+  fit_df <- lm_robust(as.formula(fr), data = df_short_prison_only, clusters = judge__id) %>%
+    tidy(conf.int = T) %>%
+    filter(grepl('judge', term))
+  
+  print(fit_df)
+}
+
+```
+
+There is a jump, but it's not significant and the linear effect of age is more or less maintained.
+
+
+### Judge Age and Defendant Foreign Background
+
+Let's see what this looks like for a dataset restricted to defendants with foreign background:
+```{r}
+#restrict dataset to foreign background
+df_short_defendant_foreign <- df_short %>%
+  filter(defendant_some_foreign_background == 1)
+
+df_short_prison_only_defendant_foreign <- df_short_prison_only %>%
+  filter(defendant_some_foreign_background == 1)
+
+
+#formula with age squared
+ivs <- paste(c(defendant_chars_regression[defendant_chars_regression != 'defendant_some_foreign_background'], 'I(defendant_age^2)', judge_chars_regression, 'I(judge_age^2)', sections_regression, circs_regression), collapse = ' + ')
+ivs_R <- paste(c(defendant_chars_regression[defendant_chars_regression != 'defendant_some_foreign_background'], 'I(defendant_age^2)', judge_chars_regression[judge_chars_regression != 'judge_age'], sections_regression, circs_regression), collapse = ' + ')
+
+#FULL DATASET
+fit_full_dataset <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short_defendant_foreign)
+
+#display coefficients for key variables
+fit_full_dataset %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_full_dataset, type = 'pred', terms = 'judge_age [all]')+
+  labs(x = 'Judge Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of judge age on prison time',
+        subtitle = 'Defendants with foreign background only; untransformed DV')
+
+#run F-test
+fit_full_dataset_R <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs_R)), data = df_short_defendant_foreign)
+
+
+SSR.UR <- sum(resid(fit_full_dataset)^2, na.rm = T)
+SSR.R <- sum(resid(fit_full_dataset_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_full_dataset)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+#PRISON ONLY
+
+fit_restricted_dataset <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs)), data = df_short_prison_only_defendant_foreign)
+
+#display coefficients for key variables
+fit_restricted_dataset %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_restricted_dataset, type = 'pred', terms = 'judge_age [all]')+
+  labs(x = 'Judge Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of judge age on prison time',
+        subtitle = 'Restricted Dataset; Defendants with foreign background only; untransformed DV')
+
+#run F-test
+fit_restricted_dataset_R <- lm(formula = as.formula(paste0('punishment_prison_days ~ ', ivs_R)), data = df_short_prison_only_defendant_foreign)
+
+
+SSR.UR <- sum(resid(fit_restricted_dataset)^2, na.rm = T)
+SSR.R <- sum(resid(fit_restricted_dataset_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_restricted_dataset)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+#PRISON ONLY, LOGGED DV
+fit_restricted_dataset_logged_dv <- lm(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs)), data = df_short_prison_only_defendant_foreign)
+
+fit_restricted_dataset_logged_dv %>% 
+  tidy(conf.int = T) %>%
+  as.data.frame() %>%
+  filter(term %in% c(judge_chars_regression, 'I(judge_age^2)')) %>%
+  print()
+
+plot_model(fit_restricted_dataset_logged_dv, type = 'pred', terms = 'judge_age [all]')+
+  labs(x = 'Judge Age',
+        y = 'Predicted Prison Days',
+        title = 'Impact of judge age on prison time',
+        subtitle = 'Restricted Dataset;Defendants with foreign background only; logged DV')
+
+#run F-test
+fit_restricted_dataset_logged_dv_R <- lm(formula = as.formula(paste0('punishment_prison_days_log ~ ', ivs_R)), data = df_short_prison_only_defendant_foreign)
+
+
+SSR.UR <- sum(resid(fit_restricted_dataset_logged_dv)^2, na.rm = T)
+SSR.R <- sum(resid(fit_restricted_dataset_logged_dv_R)^2, na.rm = T)
+DFdenom <- df.residual(fit_restricted_dataset_logged_dv)
+DFnum <- 2
+F.stat <- ((SSR.R - SSR.UR)/DFnum) / (SSR.UR/DFdenom)
+F.stat
+qf(0.99, DFnum, DFdenom)
+
+```
+F-stats are significant for all specifications.
+
+## District FEs
+```{r}
+#Include 'case_district_court' as an additional IV to test that results are robust to geographical controls
+fr_district <- paste0('punishment_prison_days ~ ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression, 'case_district_court'), collapse = ' + '))
+
+fit_full_district <- lm_robust(as.formula(fr_district), clusters = judge__id, data = df_short)
+summary(fit_full_district)
+
+fit_restricted_district <- lm_robust(as.formula(fr_district), clusters = judge__id, data = df_short_prison_only)
+summary(fit_restricted_district)
+
+fr_district_logged <- paste0('punishment_prison_days_log ~ ', paste(c(defendant_chars_regression, judge_chars_regression, sections_regression, circs_regression, 'case_district_court'), collapse = ' + '))
+fit_restricted_logged_district <- lm_robust(as.formula(fr_district_logged), clusters = judge__id, data = df_short_prison_only)
+summary(fit_restricted_logged_district)
+```
+

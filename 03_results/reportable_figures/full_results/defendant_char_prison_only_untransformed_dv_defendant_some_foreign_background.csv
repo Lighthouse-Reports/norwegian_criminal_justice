@@ -1,0 +1,3 @@
+"","term","estimate","std.error","statistic","p.value","conf.low","conf.high","df","outcome","sig_level"
+"1","(Intercept)",107.056629213482,7.45722486548402,14.3560950815627,1.17166872369117e-36,92.3869993671086,121.726259059856,330.390882757991,"punishment_prison_days","***"
+"2","defendant_some_foreign_background",16.7322596754059,12.2200861016233,1.36924237163789,0.171865981288356,-7.30790906065451,40.7724284114664,326.035563638365,"punishment_prison_days","insig"
