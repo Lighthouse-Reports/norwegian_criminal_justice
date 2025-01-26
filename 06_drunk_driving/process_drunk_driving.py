@@ -2,9 +2,6 @@ import pandas as pd
 import os 
 import pickle
 
-os.chdir("/Users/gsgeiger/norwegian_lay_judges/scratchpad/drunk_driving/")
-
-
 def load_data() -> pd.DataFrame : 
     with open("preprocessed_data/df_with_bpa.pickle","rb") as f : 
         df = pickle.load(f)
