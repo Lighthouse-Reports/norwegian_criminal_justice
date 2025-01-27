@@ -1,8 +1,8 @@
 # Norwegian Criminal Justice
 
 This repository contains the pipeline we used to analyze more than 9000 district court verdicts in Norway. Here are the published stories that are based on this analysis
-- TODO Story 1
-- TODO Story 2
+- [Story 1](https://www.nrk.no/1.17178868)
+- [Story 2](https://www.nrk.no/1.17176807)
 - In addition, we published a [methodology](https://www.lighthousereports.com/methodology/norway_criminal_justice/) that explains our research questions and design in more detail.
 
 This project is a collaboration between NRK and Lighthouse Reports. The data collection was primarily carried out by NRK while the data analysis was led by Lighthouse Reports. The [results folder](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/03_results) contains the results from our analysis. 
