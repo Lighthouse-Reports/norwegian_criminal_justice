@@ -12,6 +12,26 @@ We have decided to not make the underlying dataset publicly available because of
 # Pipeline Overview
 
 ## [TODO NRK] Data collection
+- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py)
+Description
+- [avsagt_dato.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/avsagt_dato.py)
+Description
+- [constants.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/constants.py)
+Description
+- [db.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/db.py)
+Description
+- [dom_class.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_class.py)
+Description
+- [dom_strenghetsgrad.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_strenghetsgrad.py)
+Description
+- [dommere_og_parter.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dommere_og_parter.py)
+Description
+- [domsslutning.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/domsslutning.py)
+Description
+- [log.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/log.py)
+Description
+- [type_avjorelse.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/type_avgjorelse.py)
+Description
 
 ## [Preprocessing](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing)
 - [process_json_data.ipynb](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/process_json_data.ipynb)
