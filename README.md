@@ -14,7 +14,7 @@ We have decided to not make the underlying dataset publicly available because of
 ## [TODO NRK] Data collection
 - [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Overall code for extracting information from verdicts in PDF format.
 - [avsagt_dato.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/avsagt_dato.py)
-Description
+Extract and parse date.
 - [constants.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/constants.py)
 Constants for use in regex.
 - [dom_class.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_class.py)
