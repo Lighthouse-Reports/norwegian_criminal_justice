@@ -12,8 +12,7 @@ We have decided to not make the underlying dataset publicly available because of
 # Pipeline Overview
 
 ## [TODO NRK] Data collection
-- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py)
-Description
+- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Extracts information from verdicts in PDF format.
 - [avsagt_dato.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/avsagt_dato.py)
 Description
 - [constants.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/constants.py)
@@ -31,6 +30,8 @@ Description
 - [log.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/log.py)
 Description
 - [type_avjorelse.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/type_avgjorelse.py)
+Description
+- [mitigating_aggravating_ai_lists.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/mitigating_and_aggravating/mitigating_aggravating_ai_lists.py)
 Description
 
 ## [Preprocessing](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing)
