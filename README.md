@@ -12,25 +12,23 @@ We have decided to not make the underlying dataset publicly available because of
 # Pipeline Overview
 
 ## [TODO NRK] Data collection
-- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Extracts information from verdicts in PDF format.
+- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Overall code for extracting information from verdicts in PDF format.
 - [avsagt_dato.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/avsagt_dato.py)
 Description
 - [constants.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/constants.py)
-Description
-- [db.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/db.py)
-Description
+Constants for use in regex.
 - [dom_class.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_class.py)
-Description
+Class
 - [dom_strenghetsgrad.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_strenghetsgrad.py)
-Description
+Extract type of sentence. 
 - [dommere_og_parter.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dommere_og_parter.py)
-Description
+Extracting judges and defendants. 
 - [domsslutning.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/domsslutning.py)
-Description
-- [log.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/log.py)
-Description
+Extract the ruling from a judgement.
 - [type_avjorelse.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/type_avgjorelse.py)
-Description
+Extract if the verdict is  ruling from a judgement.
+- [mitigating_aggravating_ai.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/mitigating_and_aggravating/mitigating_aggravating_ai.py)
+Reviews the text of all judgments to find paragraphs containing the words 'mitigating' or 'aggravating'. Removes any names and dates from the paragraphs. Uses Microsoft Azure OpenAI's 'gpt4-turbo' API to analyze these paragraphs and identify mitigating and aggravating circumstances.
 - [mitigating_aggravating_ai_lists.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/mitigating_and_aggravating/mitigating_aggravating_ai_lists.py)
 Description
 
