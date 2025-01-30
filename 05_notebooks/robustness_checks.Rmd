@@ -35,6 +35,9 @@ library(tipr)
 require(sensemakr)
 library(margins)
 library(robust)
+library(ggthemes)
+library(patchwork)
+library(extrafont)
 ```
 
 ```{r load data}
@@ -399,9 +402,20 @@ plot_model(fit_restricted_dataset, type = "pred", terms = "judge_age [all]") +
   labs(
     x = "Judge Age",
     y = "Predicted Prison Days",
-    title = "Impact of Judge Age on Prison Time",
-    subtitle = "Restricted Dataset; Untransformed DV"
+    title = "Marginal Effect of Judge Age on Prison Time",
+    subtitle = "Includes only defendants who were sentences to > 0 days in prison"
+  )+
+  xlim(20,80)+
+  theme(
+    #text = element_text(family = "Barlow", size = 14), # Change font and size globally
+    plot.title = element_text(face = "bold", size = 13),        # Bold and larger font for title
+    axis.title = element_text(size = 13),                      # Axis titles font size
+    axis.text = element_text(size = 12),    
+    panel.background = element_rect(fill = rgb(250, 240, 240, maxColorValue = 255), color = NA), # Panel background
+    plot.background = element_rect(fill = rgb(250, 240, 240, maxColorValue = 255), color = NA),  # Entire plot background
+    panel.border = element_rect(color = "black", fill = NA)# Axis labels font size
   )
+
 
 ggsave(paste0(output_fp, 'judge_age_prison_only.svg'), plot = last_plot(), width = 8, height = 6)
 
