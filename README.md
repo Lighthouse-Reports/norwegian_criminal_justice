@@ -11,30 +11,16 @@ We have decided to not make the underlying dataset publicly available because of
 
 # Pipeline Overview
 
-## [TODO NRK] Data collection
+## [Parsing of Verdicts](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing/parsing_verdicts)
 - [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Overall code for extracting information from verdicts in PDF format.
-- [avsagt_dato.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/avsagt_dato.py)
-Extract and parse date.
-- [constants.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/constants.py)
-Constants for use in regex.
-- [dom_class.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_class.py)
-Class
-- [dom_strenghetsgrad.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dom_strenghetsgrad.py)
-Extract type of sentence. 
-- [dommere_og_parter.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/dommere_og_parter.py)
-Extracting judges and defendants. 
-- [domsslutning.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/domsslutning.py)
-Extract the ruling from a judgement.
-- [type_avjorelse.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/helpers/type_avgjorelse.py)
-Extract if the verdict is  ruling from a judgement.
-- [mitigating_aggravating_ai.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/mitigating_and_aggravating/mitigating_aggravating_ai.py)
-Reviews the text of all judgments to find paragraphs containing the words 'mitigating' or 'aggravating'. Removes any names and dates from the paragraphs. Uses Microsoft Azure OpenAI's 'gpt4-turbo' API to analyze these paragraphs and identify mitigating and aggravating circumstances.
-- [mitigating_aggravating_ai_lists.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/mitigating_and_aggravating/mitigating_aggravating_ai_lists.py)
-Description
+- Helpers are defined in this [folder](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing/parsing_verdicts/helpers)
 
 ## [Preprocessing](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing)
 - [process_json_data.ipynb](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/process_json_data.ipynb)
 Converts JSON of verdict data into table format.
+- [mitigating_aggravating_ai.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/mitigating_and_aggravating/mitigating_aggravating_ai.ipynb)
+Reviews the text of all judgments to find paragraphs containing the words 'mitigating' or 'aggravating'. Removes any names and dates from the paragraphs. Uses Microsoft Azure OpenAI's 'gpt4-turbo' API to analyze these paragraphs and identify mitigating and aggravating circumstances.
+- [mitigating_aggravating_ai_lists.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/mitigating_and_aggravating/mitigating_aggravating_ai_lists.py): List of mitigating and aggravating circumstances
 - [aggravating_mitigating_preprocessing.R](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/aggravating_mitigating_preprocessing.R)
 Standardizes variables related to mitigating and aggravating circumstances.
 - [preprocessing.R](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/preprocessing.R)
