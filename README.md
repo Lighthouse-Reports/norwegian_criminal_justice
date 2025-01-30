@@ -12,7 +12,7 @@ We have decided to not make the underlying dataset publicly available because of
 # Pipeline Overview
 
 ## [Parsing](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing/parsing_verdicts)
-- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/NRK/parsing_verdicts/parsing.py) Overall code for extracting information from verdicts in PDF format.
+- [parsing.py](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/blob/main/04_preprocessing/parsing_verdicts/parsing.py) Overall code for extracting information from verdicts in PDF format.
 - Helpers are defined in this [folder](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing/parsing_verdicts/helpers)
 
 ## [Preprocessing](https://github.com/Lighthouse-Reports/norwegian_criminal_justice/tree/main/04_preprocessing)
